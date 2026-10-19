@@ -3183,7 +3183,7 @@ function loosenNumbers(s, opts) {
     // 2) 百分比：数值掩掉，百分号留着（换档后还算「有点进步」而不是「一点没动」）
     .replace(/\d+(?:\.\d+)?\s*%/g, '**%')
     // 3) 金额：数字掩成星号，「元」留着，句子的结构不被破坏
-    .replace(/[¥￥]\s*[\d,]{3,}(?:\.\d+)?/g, function (m0) { return keepMoney ? m0 : '¥****'; })
+    .replace(/[¥￥]\s*[\d,]{3,}(?:\.\d+)?/g, function (m0) { return keepMoney ? m0 : '￥****'; })
     .replace(/[\d,]{3,}(?:\.\d+)?\s*元/g, function (m0) { return keepMoney ? m0 : '**** 元'; })
     // 4) 事件文案里写死的属性数字
     .replace(/技能\s*\d+(?:\.\d+)?/g, '技能**')
@@ -3957,7 +3957,7 @@ const ROOT_EVENTS = [
         }),
       },
       {
-        text: '改用木系藥材温养经脉', hint: '慢一步，但走得远',
+        text: '改用木系药材温养经脉', hint: '慢一步，但走得远',
         run: () => ({
           deltas: { health: 8, skill: 4, money: -800 },
           lines: ['你花了一笔钱买药，把三道伤口养了回去', '这一养就是三年。老道说：「你比我想的沉得住气。」'],
@@ -5215,7 +5215,7 @@ function buildShareLines(state, ending) {
 
   var attrs = (e.finalAttrs || []).slice(0, 5).map(function (a) {
     var mv = (typeof moneyText === 'function') ? moneyText(a.value) : String(a.value);
-    return a.name + ' ' + (a.name === '金钱' ? '¥' + mv : a.value);
+    return a.name + ' ' + (a.name === '金钱' ? '￥' + mv : a.value);
   }).join('   ');
   if (attrs) lines.push({ k: 'stats', t: attrs });
 
@@ -5368,7 +5368,7 @@ function shareCardSvg(state, ending, opts) {
   // ⑥ 五维数据（一行）
   var attrs = (e.finalAttrs || []).slice(0, 5).map(function (a) {
     var mv = (typeof moneyText === 'function') ? moneyText(a.value) : String(a.value);
-    return a.name + ' ' + (a.name === '金钱' ? '¥' + mv : a.value);
+    return a.name + ' ' + (a.name === '金钱' ? '￥' + mv : a.value);
   }).join('　');
   if (attrs) {
     p.push(txt(W / 2, y, 13, '#463f36', 'middle', 'letter-spacing="0.5"', attrs));
@@ -6504,6 +6504,42 @@ EVENTS.push(...CONTENT_EVENTS);
 
 const ACH_BY_ID = Object.fromEntries(ACHIEVEMENTS.map((a) => [a.id, a]));
 
+/* ===== patch177：跨轮回的历史成就 ===== */
+const ACH_HISTORY_KEY = 'life_sim_ach_history_v1';
+
+function readAchHistory() {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(ACH_HISTORY_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return (obj && typeof obj === 'object') ? obj : {};
+  } catch (e) { return {}; }
+}
+function writeAchHistory(hist) {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    localStorage.setItem(ACH_HISTORY_KEY, JSON.stringify(hist));
+    return true;
+  } catch (e) { return false; }
+}
+function mergeAchHistory(state, ach) {
+  const hist = readAchHistory();
+  const rec = hist[ach.id];
+  if (rec) {
+    rec.times = (rec.times || 1) + 1;
+    rec.lastName = (state && state.name) || rec.lastName || '';
+  } else {
+    hist[ach.id] = {
+      firstYear: (state && state.year != null) ? state.year : null,
+      firstAge: (state && state.age != null) ? state.age : null,
+      times: 1,
+      lastName: (state && state.name) || '',
+    };
+  }
+  writeAchHistory(hist);
+}
+
 function checkAchievements(draft, special) {
   if (!draft.achievements) draft.achievements = {};
   for (const ach of ACHIEVEMENTS) {
@@ -6512,6 +6548,7 @@ function checkAchievements(draft, special) {
     try { ok = !!ach.cond(draft); } catch (e) { ok = false; }
     if (ok) {
       draft.achievements[ach.id] = draft.year;
+      try { mergeAchHistory(draft, ach); } catch (e) {}   // patch177
       special(`【成就 · ${ach.cat}】${ach.name}`, ach.desc, 'achievement');
     }
   }
@@ -8551,7 +8588,7 @@ function buildEnding(state) {
           ? '这几年你几乎都在闭关，山下的事与你无关。'
           : '这几年你没有留下太多记录，时间过得很快。');
     paras.push(
-      `${st.min}–${actualMax} 岁，${st.name}：这 ${spanYears} 年里，${
+      `${st.min}—${actualMax} 岁，${st.name}：这 ${spanYears} 年里，${
         main ? `你最常做的事是「${main.name}」。` : ''
       }${tail}`
     );
@@ -8810,10 +8847,11 @@ function renderSettlementModal(report, { onNext, onFinish }) {
 
 
 const SCENE_IMG = {
-  city: 'assets/bg/city.jpg',
-  park: 'assets/bg/park.jpg',
-  mountain: 'assets/bg/mountain.jpg',
-  seaside: 'assets/bg/seaside.jpg',
+  // patch175：改用 WebP（同画质下比 JPEG 小 20-55%）
+  city: 'assets/bg/city.webp',
+  park: 'assets/bg/park.webp',
+  mountain: 'assets/bg/mountain.webp',
+  seaside: 'assets/bg/seaside.webp',
 };
 
 const SCENE_NAMES = { city: '城市街角', park: '公园长椅', mountain: '山间小路', seaside: '海边黄昏' };
@@ -8977,7 +9015,7 @@ function renderStats(slot, state) {
           h('div', { class: 'stat-head' },
             h('span', { class: 'stat-name', text: a.name }),
             d ? h('span', { class: `stat-delta ${d.value > 0 ? 'up' : 'down'}`, text: `${deltaText(d.value)}` }) : null,
-            h('span', { class: 'stat-val', text: a.key === 'money' ? `¥${moneyText(v)}` : String(Math.round(v)) })
+            h('span', { class: 'stat-val', text: a.key === 'money' ? `￥${moneyText(v)}` : String(Math.round(v)) })
           ),
           h('div', { class: 'bar' }, h('i', { style: { width: `${Math.round(ratio * 100)}%`, background: a.color } })),
           h('div', { class: 'stat-desc', text: a.desc(v) })
@@ -9428,7 +9466,7 @@ function renderStartScreen(slot, { saveInfo, onStart, onContinue }) {
   });
 
   slot.append(
-    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-01.jpg')" } }),
+    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-01.webp')" } }),
     h('header', { class: 'start-hero' },
       h('p', { class: 'kicker', text: 'LIFE WEATHER' }),
       h('h1', { text: '人生天气预报' }),
@@ -9512,7 +9550,7 @@ function renderEndingScreen(slot, ending, state, { onRestart, onJournal }) {
   try { state.lastEnding = ending; } catch (e) { /* 忽略 */ }
   clear(slot);
   slot.append(
-    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-03.jpg')" } }),
+    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-03.webp')" } }),
     h('header', { class: 'ending-hero' },
       h('p', { class: 'e-kicker', text: 'LIFE WEATHER · 人生总结' }),
       h('h1', { text: `${ending.name}的一生` }),
@@ -9539,7 +9577,7 @@ function renderEndingScreen(slot, ending, state, { onRestart, onJournal }) {
           h('div', { class: 'final-stats' },
             ending.finalAttrs.map((a) => h('div', { class: 'final-stat' },
               h('div', { class: 'fs-name', text: a.name }),
-              h('div', { class: 'fs-val', text: a.name === '金钱' ? `¥${moneyText(a.value)}` : String(a.value) })
+              h('div', { class: 'fs-val', text: a.name === '金钱' ? `￥${moneyText(a.value)}` : String(a.value) })
             ))
           ),
           h('h3', { class: 'card-title', style: { marginTop: '14px' }, html: icon('calendar') }, '这些年你做得最多的事'),
@@ -10096,39 +10134,49 @@ function showHelp() {
      这三样都是「玩法说明」在用的，所以配色、圆角、字体、间距全部天然一致。 */
   function showAchievements() {
     const st = app.state || {};
-    const got = st.achievements || {};          // { id: { name, age, at } } 或 { id: age }
-    const gotIds = Object.keys(got);
+    // patch177：**读历史累计**，不只是本局
+    const thisRound = st.achievements || {};
+    let hist = {};
+    try { hist = (typeof readAchHistory === 'function') ? readAchHistory() : {}; } catch (e) { hist = {}; }
+    let freshThisRound = 0;
     const total = (typeof ACHIEVEMENTS !== 'undefined' && ACHIEVEMENTS.length) || 0;
 
     // 已解锁的整理成「分类 → 成就」
     const byCat = {};
     let unlocked = 0;
     for (const a of ACHIEVEMENTS) {
-      const rec = got[a.id];
-      if (rec === undefined || rec === null || rec === false) continue;
+      const isThisRound = !!thisRound[a.id];
+      const rec = hist[a.id];
+      if (!isThisRound && !rec) continue;
       unlocked++;
-      const age = (typeof rec === 'object') ? (rec.age != null ? rec.age : rec.at) : rec;
+      if (isThisRound) freshThisRound++;
+      let ageShow = null;
+      if (rec && rec.firstAge != null) ageShow = fmtAge(rec.firstAge);
+      else if (isThisRound) ageShow = '第 ' + thisRound[a.id] + ' 年';
+      const times = (rec && rec.times) ? rec.times : (isThisRound ? 1 : 0);
       const cat = a.cat || '其它';
-      (byCat[cat] = byCat[cat] || []).push({ a, age });
+      (byCat[cat] = byCat[cat] || []).push({ a, ageShow, times, isThisRound });
     }
 
     const body = h('div', {});
     // 顶部进度
     body.append(h('p', {
       class: 'start-note',
-      text: `已经拿到 ${unlocked} / ${total} 个成就` + (unlocked >= total ? '　全都拿到了。' : '　慢慢来，它们散在不同的活法里。'),
+      text: `历史累计拿到 ${unlocked} / ${total} 个成就` + (unlocked >= total ? '　全都拿到了。' : '　慢慢来，它们散在不同的活法里。') + (freshThisRound ? `　本局新拿 ${freshThisRound} 个。` : ''),
     }));
 
     if (!unlocked) {
-      body.append(h('p', { class: 'start-note', text: '这一世还没拿到成就。成就不是任务，是你某一生活成了那个样子时，顺带留下的记号。' }));
+      body.append(h('p', { class: 'start-note', text: '还没有拿到成就。成就不是任务，是你某一生活成了那个样子时，顺带留下的记号。' }));
     } else {
       const list = h('div', { class: 'help-list' });
       for (const cat of Object.keys(byCat)) {
         list.append(h('h3', { class: 'journal-stage', text: `${cat} · ${byCat[cat].length} 个` }));
         for (const it of byCat[cat]) {
-          const ageTxt = (it.age != null && it.age !== '') ? `　${fmtAge(it.age)}` : '';
+          const ageTxt = it.ageShow ? ('　' + it.ageShow) : '';
+          const timesTxt = it.times > 1 ? ('　累计 ' + it.times + ' 次') : '';
+          const freshTxt = it.isThisRound ? '　本局' : '';
           list.append(h('li', {
-            html: `✅ <b>${it.a.name}</b>${ageTxt}<br>${it.a.desc || ''}`,
+            html: `★ <b>${it.a.name}</b>${ageTxt}${timesTxt}${freshTxt}<br>${it.a.desc || ''}`,
           }));
         }
       }
