@@ -1168,28 +1168,9 @@ function downloadShareCard() {
     var st = app.state;
     var ending = st && st.lastEnding;
     if (!ending) { toast('还没有结束这一生，暂时没有可以分享的卡片'); return; }
-    // patch186：只提示「正在加载」，加载完自然弹出，不报任何错
-    toast('正在加载分享卡…');
-    preloadCardBg().then(function () {
-      setTimeout(function () { try { __downloadShareCardRaw(); } catch (e) {} }, 30);
-    });
-  } catch (e) { toast('生成失败：' + (e && e.message ? e.message : e)); }
-}
-
-function __downloadShareCardRaw() {
-  try {
-    var st = app.state;
-    var ending = st && st.lastEnding;
-    if (!ending) { toast('还没有结束这一生，暂时没有可以分享的卡片'); return; }
-    /* patch183：**两步合成**
-       ① 先生成「不带背景」的 SVG（只有文字、二维码、描边）
-       ② Canvas 上先用 drawImage 直接画背景图，再把 SVG 叠上去
-       这样背景图完全绕开 SVG 渲染管线 —— 微信 WebView 丢弃 <image> 的问题就绕过去了。 */
-    var svgNoBg = shareCardSvg(st, ending, { noBg: true });
-    var bgKey = (typeof lastCardBgKey !== 'undefined' && lastCardBgKey) ? lastCardBgKey : 'normal';
-    var bgData = (typeof CARD_BG !== 'undefined' && (CARD_BG[bgKey] || CARD_BG.normal)) || '';
+    var svg = shareCardSvg(st, ending, {});
     // 用 data URL（而不是 blob URL）：避免 Canvas 被判定为跨源污染
-    var svgUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgNoBg);
+    var svgUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
     var img = new Image();
     img.onload = function () {
       try {
@@ -1201,47 +1182,8 @@ function __downloadShareCardRaw() {
         cv.width = w; cv.height = ch;
         var g = cv.getContext('2d');
         if (!g) { toast('这个浏览器不支持导出图片'); return; }
-        // patch183：画内容（背景 + SVG 叠加）到一个函数里，背景可能异步加载
-        var paintCard = function (bgImg) {
-          g.fillStyle = '#f7f3ea'; g.fillRect(0, 0, w, ch);
-          if (bgImg) {
-            // 等比裁切铺满（等价于 SVG 里的 preserveAspectRatio="xMidYMid slice"）
-            try {
-              var iw = bgImg.naturalWidth || bgImg.width;
-              var ih = bgImg.naturalHeight || bgImg.height;
-              var scale = Math.max(w / iw, ch / ih);
-              var dw = iw * scale, dh = ih * scale;
-              g.drawImage(bgImg, (w - dw) / 2, (ch - dh) / 2, dw, dh);
-            } catch (e) {}
-          }
-          g.drawImage(img, 0, 0, w, ch);
-        };
-        /* patch186：**只等加载，不校验、不报错、不超时**
-           背景图 load 完成（或 decode 完成）→ 直接绘制 → 弹窗。
-           没有 canvas 内容校验，没有失败 toast，也没有超时放弃——
-           慢就慢一点，但最终一定会出完整的图。 */
-        var startPaint = function () {
-          var draw = function (bgImg) {
-            try { paintCard(bgImg || null); } catch (e) {}
-            finishAfterPaint();
-          };
-          if (!bgData) { draw(null); return; }          // 没有背景数据就画纯色底，不报错
-          var bgImg = new Image();
-          var fired = false;
-          var once = function () {
-            if (fired) return;
-            fired = true;
-            draw(bgImg);
-          };
-          bgImg.onload = function () {
-            if (bgImg.decode) {
-              try { bgImg.decode().then(once).catch(once); } catch (e) { once(); }
-            } else once();
-          };
-          bgImg.onerror = function () { if (!fired) { fired = true; draw(null); } };
-          try { bgImg.src = bgData; } catch (e) { if (!fired) { fired = true; draw(null); } }
-        };
-        var finishAfterPaint = function () {
+        g.fillStyle = '#f7f3ea'; g.fillRect(0, 0, w, ch);
+        g.drawImage(img, 0, 0, w, ch);
         var finish = function (url, blobOrUrl) {
           // 预览层里图片按屏幕宽高比缩放，长图也放得下
           var vw = (window.innerWidth || 360) - 48;
@@ -1286,8 +1228,6 @@ function __downloadShareCardRaw() {
         };
         if (cv.toBlob) cv.toBlob(function (b) { toUrl(b || cv.toDataURL('image/png')); }, 'image/png');
         else toUrl(cv.toDataURL('image/png'));
-        };   // patch183：finishAfterPaint 收口
-        startPaint();
       } catch (e) { toast('导出失败：' + (e && e.message ? e.message : e)); }
     };
     img.onerror = function () { toast('图片生成失败，请稍后重试'); };

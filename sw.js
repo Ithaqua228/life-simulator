@@ -15,7 +15,7 @@
  *          新 SW 安装时会重新拉一遍，旧缓存自动清掉。
  */
 
-var CACHE = 'life-sim-v187';
+var CACHE = 'life-sim-v188';
 
 var ASSETS = [
   './',

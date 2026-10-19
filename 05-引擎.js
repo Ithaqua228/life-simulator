@@ -184,7 +184,6 @@ function shareCardSvg(state, ending, opts) {
   p.push(txt(W / 2, H - 46, 11, '#a89a86', 'middle', 'letter-spacing="1"', (typeof SHARE_AUTHOR_EXTRA !== 'undefined' ? SHARE_AUTHOR_EXTRA : '')));
 
   p.push('</svg>');
-  try { lastCardBgKey = bgKey; } catch (e) {}
   return p.join('');
 }
 // 供测试用（注入 bundle 时这行会被去掉）
