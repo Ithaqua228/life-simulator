@@ -10701,7 +10701,48 @@ function __shareCardSaveBlob(st, blobOrUrl) {
     toast('已开始保存到你的下载目录');
   } catch (e) { toast('保存失败，请长按图片保存'); }
 }
+/* ===== patch178：分享卡背景预解码 =====
+   问题：SVG 里内嵌的 base64 背景图，在 img.onload 触发时可能还没解码完，
+   于是第一次 drawImage 画出来是空白；退出去再点一次（base64 已缓存）才正常。
+   解决：先把所有 CARD_BG 的 base64 用 Image 真正解码一遍，再执行原来的生成流程。 */
+var __cardBgReady = null;
+function preloadCardBg() {
+  if (__cardBgReady) return __cardBgReady;
+  __cardBgReady = new Promise(function (resolve) {
+    var urls = [];
+    try { for (var k in CARD_BG) { if (CARD_BG[k]) urls.push(CARD_BG[k]); } } catch (e) {}
+    if (!urls.length) { resolve(true); return; }
+    var left = urls.length, settled = false;
+    var done = function () { if (!settled) { settled = true; resolve(true); } };
+    var tick = function () { left--; if (left <= 0) done(); };
+    setTimeout(done, 4000);                    // 兜底：最多等 4 秒
+    urls.forEach(function (u) {
+      var im = new Image();
+      im.onload = function () {
+        if (im.decode) { try { im.decode().then(tick).catch(tick); } catch (e) { tick(); } }
+        else tick();
+      };
+      im.onerror = tick;
+      try { im.src = u; } catch (e) { tick(); }
+    });
+  });
+  return __cardBgReady;
+}
+
 function downloadShareCard() {
+  try {
+    var st = app.state;
+    var ending = st && st.lastEnding;
+    if (!ending) { toast('还没有结束这一生，暂时没有可以分享的卡片'); return; }
+    // patch178：预解码 → 留 30ms 给渲染管线 → 再走原来的生成逻辑
+    toast('正在生成分享卡…');
+    preloadCardBg().then(function () {
+      setTimeout(function () { try { __downloadShareCardRaw(); } catch (e) {} }, 30);
+    });
+  } catch (e) { toast('生成失败：' + (e && e.message ? e.message : e)); }
+}
+
+function __downloadShareCardRaw() {
   try {
     var st = app.state;
     var ending = st && st.lastEnding;
