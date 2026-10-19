@@ -1,4 +1,4 @@
-/* ===== 人生模拟器 · Service Worker（patch182）=====
+﻿/* ===== 人生模拟器 · Service Worker（patch182）=====
  *
  * 目的：首次打开后把所有资源存进浏览器缓存，之后**再打开不再下载**，秒开。
  *
@@ -15,7 +15,7 @@
  *          新 SW 安装时会重新拉一遍，旧缓存自动清掉。
  */
 
-var CACHE = 'life-sim-v180';
+var CACHE = 'life-sim-v187';
 
 var ASSETS = [
   './',
@@ -31,12 +31,12 @@ var ASSETS = [
   './06-结局与界面.js',
   './07-入口.js',
   './assets/fonts/wawa-subset.woff2',
-  './assets/bg/city.webp',
-  './assets/bg/park.webp',
-  './assets/bg/mountain.webp',
-  './assets/bg/seaside.webp',
-  './assets/journal/journal-01.webp',
-  './assets/journal/journal-03.webp'
+  './assets/bg/city.jpg',
+  './assets/bg/park.jpg',
+  './assets/bg/mountain.jpg',
+  './assets/bg/seaside.jpg',
+  './assets/journal/journal-01.jpg',
+  './assets/journal/journal-03.jpg'
 ];
 
 // ── 安装：把全部资源拉进缓存 ──

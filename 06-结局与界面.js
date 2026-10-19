@@ -1401,11 +1401,11 @@ function renderSettlementModal(report, { onNext, onFinish }) {
 
 
 const SCENE_IMG = {
-  // patch175：改用 WebP（同画质下比 JPEG 小 20-55%）
-  city: 'assets/bg/city.webp',
-  park: 'assets/bg/park.webp',
-  mountain: 'assets/bg/mountain.webp',
-  seaside: 'assets/bg/seaside.webp',
+  // patch184：**用原始 JPEG**（高质量 WebP 反而更大，低质量会糊）
+  city: 'assets/bg/city.jpg',
+  park: 'assets/bg/park.jpg',
+  mountain: 'assets/bg/mountain.jpg',
+  seaside: 'assets/bg/seaside.jpg',
 };
 
 const SCENE_NAMES = { city: '城市街角', park: '公园长椅', mountain: '山间小路', seaside: '海边黄昏' };
@@ -2020,7 +2020,7 @@ function renderStartScreen(slot, { saveInfo, onStart, onContinue }) {
   });
 
   slot.append(
-    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-01.webp')" } }),
+    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-01.jpg')" } }),
     h('header', { class: 'start-hero' },
       h('p', { class: 'kicker', text: 'LIFE WEATHER' }),
       h('h1', { text: '人生天气预报' }),
@@ -2104,7 +2104,7 @@ function renderEndingScreen(slot, ending, state, { onRestart, onJournal }) {
   try { state.lastEnding = ending; } catch (e) { /* 忽略 */ }
   clear(slot);
   slot.append(
-    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-03.webp')" } }),
+    h('div', { class: 'page-bg', style: { backgroundImage: "url('assets/journal/journal-03.jpg')" } }),
     h('header', { class: 'ending-hero' },
       h('p', { class: 'e-kicker', text: 'LIFE WEATHER · 人生总结' }),
       h('h1', { text: `${ending.name}的一生` }),

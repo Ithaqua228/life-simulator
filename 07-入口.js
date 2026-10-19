@@ -173,6 +173,8 @@ function showGame() {
   els.ending.hidden = true;
   els.game.hidden = false;
   renderBoard();
+  // patch187：**进局内就开始预加载**，先把局内的图加载完，再接着加载分享卡背景
+  try { if (typeof preloadGameAssets === 'function') preloadGameAssets(); } catch (e) {}
   try { __cheatInstall(); } catch (e) {}
 }
 
@@ -185,6 +187,7 @@ function showEnding() {
   // patch181：**结算页就开始预解码分享卡背景** —— 玩家在这里通常要停留几秒，
     // 正好拿来把三张 base64 背景解码进内存，之后点「生成分享卡」就秒出图。
   try { if (typeof preloadCardBg === 'function') preloadCardBg(); } catch (e) {}
+  try { if (typeof warmCardBgToCanvas === 'function') warmCardBgToCanvas(); } catch (e) {}
   renderEndingScreen(els.ending, app.state.ending, app.state, {
     onRestart: confirmRestart,
     onJournal: showFullJournal,
@@ -1093,13 +1096,80 @@ function preloadCardBg() {
   return __cardBgReady;
 }
 
+/* ===== patch185：把分享卡背景真正画一遍到离屏 canvas =====
+   只解码 Image 还不够——某些 WebView 要等到真正 drawImage 过一次，
+   纹理才进 GPU/内存，第二次画才会快且完整。这里在结算页就把这步做掉。 */
+var __cardBgWarmed = false;
+function warmCardBgToCanvas() {
+  if (__cardBgWarmed) return;
+  var st = app.state || {};
+  // 先确定这张卡会用哪个背景
+  var svg = null;
+  try { svg = shareCardSvg(st, st.lastEnding || {}, { noBg: true }); } catch (e) {}
+  var key = (typeof lastCardBgKey !== 'undefined' && lastCardBgKey) ? lastCardBgKey : 'normal';
+  var data = (typeof CARD_BG !== 'undefined' && (CARD_BG[key] || CARD_BG.normal)) || '';
+  if (!data) return;
+  try {
+    var cv = document.createElement('canvas');
+    cv.width = 8; cv.height = 8;                 // 小画布只为预热，不占内存
+    var g = cv.getContext('2d');
+    if (!g) return;
+    var im = new Image();
+    im.onload = function () {
+      try { g.drawImage(im, 0, 0, 8, 8); __cardBgWarmed = true; } catch (e) {}
+    };
+    im.src = data;
+  } catch (e) {}
+}
+
+/* ===== patch187：局内预加载队列 =====
+   进入游戏主界面时启动，按顺序把资源拉进浏览器缓存：
+     4 张场景图 → 2 张手账图 → 分享卡背景（3 张 base64，交给 preloadCardBg）
+   这样等玩家打到结局、点「生成分享卡」时，图早就在内存 / HTTP 缓存里了。
+   全程幂等 + 串行 + 单张失败不中断。 */
+var __gameAssetsStarted = false;
+function preloadGameAssets() {
+  if (__gameAssetsStarted) return;
+  __gameAssetsStarted = true;
+
+  var queue = [
+    'assets/bg/city.jpg',
+    'assets/bg/park.jpg',
+    'assets/bg/mountain.jpg',
+    'assets/bg/seaside.jpg',
+    'assets/journal/journal-01.jpg',
+    'assets/journal/journal-03.jpg'
+  ];
+  var i = 0;
+  var next = function () {
+    if (i >= queue.length) {
+      // 局内图全部处理完 → 接着预热分享卡背景（base64 解码 + 画一次进离屏 canvas）
+      try { if (typeof preloadCardBg === 'function') preloadCardBg(); } catch (e) {}
+      try { if (typeof warmCardBgToCanvas === 'function') warmCardBgToCanvas(); } catch (e) {}
+      return;
+    }
+    var url = queue[i++];
+    var im = new Image();
+    var done = function () { setTimeout(next, 200); };   // 200ms 间隔，不和渲染抢带宽
+    im.onload = function () {
+      // 再多走一步 decode，确保真正解好码
+      if (im.decode) { try { im.decode().then(done).catch(done); } catch (e) { done(); } }
+      else done();
+    };
+    im.onerror = done;
+    try { im.src = url; } catch (e) { done(); }
+  };
+  // 进局内先让出首帧，再开始预加载
+  setTimeout(next, 600);
+}
+
 function downloadShareCard() {
   try {
     var st = app.state;
     var ending = st && st.lastEnding;
     if (!ending) { toast('还没有结束这一生，暂时没有可以分享的卡片'); return; }
-    // patch178：预解码 → 留 30ms 给渲染管线 → 再走原来的生成逻辑
-    toast('正在生成分享卡…');
+    // patch186：只提示「正在加载」，加载完自然弹出，不报任何错
+    toast('正在加载分享卡…');
     preloadCardBg().then(function () {
       setTimeout(function () { try { __downloadShareCardRaw(); } catch (e) {} }, 30);
     });
@@ -1111,9 +1181,15 @@ function __downloadShareCardRaw() {
     var st = app.state;
     var ending = st && st.lastEnding;
     if (!ending) { toast('还没有结束这一生，暂时没有可以分享的卡片'); return; }
-    var svg = shareCardSvg(st, ending, {});
+    /* patch183：**两步合成**
+       ① 先生成「不带背景」的 SVG（只有文字、二维码、描边）
+       ② Canvas 上先用 drawImage 直接画背景图，再把 SVG 叠上去
+       这样背景图完全绕开 SVG 渲染管线 —— 微信 WebView 丢弃 <image> 的问题就绕过去了。 */
+    var svgNoBg = shareCardSvg(st, ending, { noBg: true });
+    var bgKey = (typeof lastCardBgKey !== 'undefined' && lastCardBgKey) ? lastCardBgKey : 'normal';
+    var bgData = (typeof CARD_BG !== 'undefined' && (CARD_BG[bgKey] || CARD_BG.normal)) || '';
     // 用 data URL（而不是 blob URL）：避免 Canvas 被判定为跨源污染
-    var svgUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    var svgUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgNoBg);
     var img = new Image();
     img.onload = function () {
       try {
@@ -1125,8 +1201,47 @@ function __downloadShareCardRaw() {
         cv.width = w; cv.height = ch;
         var g = cv.getContext('2d');
         if (!g) { toast('这个浏览器不支持导出图片'); return; }
-        g.fillStyle = '#f7f3ea'; g.fillRect(0, 0, w, ch);
-        g.drawImage(img, 0, 0, w, ch);
+        // patch183：画内容（背景 + SVG 叠加）到一个函数里，背景可能异步加载
+        var paintCard = function (bgImg) {
+          g.fillStyle = '#f7f3ea'; g.fillRect(0, 0, w, ch);
+          if (bgImg) {
+            // 等比裁切铺满（等价于 SVG 里的 preserveAspectRatio="xMidYMid slice"）
+            try {
+              var iw = bgImg.naturalWidth || bgImg.width;
+              var ih = bgImg.naturalHeight || bgImg.height;
+              var scale = Math.max(w / iw, ch / ih);
+              var dw = iw * scale, dh = ih * scale;
+              g.drawImage(bgImg, (w - dw) / 2, (ch - dh) / 2, dw, dh);
+            } catch (e) {}
+          }
+          g.drawImage(img, 0, 0, w, ch);
+        };
+        /* patch186：**只等加载，不校验、不报错、不超时**
+           背景图 load 完成（或 decode 完成）→ 直接绘制 → 弹窗。
+           没有 canvas 内容校验，没有失败 toast，也没有超时放弃——
+           慢就慢一点，但最终一定会出完整的图。 */
+        var startPaint = function () {
+          var draw = function (bgImg) {
+            try { paintCard(bgImg || null); } catch (e) {}
+            finishAfterPaint();
+          };
+          if (!bgData) { draw(null); return; }          // 没有背景数据就画纯色底，不报错
+          var bgImg = new Image();
+          var fired = false;
+          var once = function () {
+            if (fired) return;
+            fired = true;
+            draw(bgImg);
+          };
+          bgImg.onload = function () {
+            if (bgImg.decode) {
+              try { bgImg.decode().then(once).catch(once); } catch (e) { once(); }
+            } else once();
+          };
+          bgImg.onerror = function () { if (!fired) { fired = true; draw(null); } };
+          try { bgImg.src = bgData; } catch (e) { if (!fired) { fired = true; draw(null); } }
+        };
+        var finishAfterPaint = function () {
         var finish = function (url, blobOrUrl) {
           // 预览层里图片按屏幕宽高比缩放，长图也放得下
           var vw = (window.innerWidth || 360) - 48;
@@ -1171,6 +1286,8 @@ function __downloadShareCardRaw() {
         };
         if (cv.toBlob) cv.toBlob(function (b) { toUrl(b || cv.toDataURL('image/png')); }, 'image/png');
         else toUrl(cv.toDataURL('image/png'));
+        };   // patch183：finishAfterPaint 收口
+        startPaint();
       } catch (e) { toast('导出失败：' + (e && e.message ? e.message : e)); }
     };
     img.onerror = function () { toast('图片生成失败，请稍后重试'); };

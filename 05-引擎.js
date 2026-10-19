@@ -7,6 +7,7 @@ function _hexLum(c) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+var lastCardBgKey = 'normal';   // patch183：最近一次分享卡用的背景键（供 canvas 合成时取背景图）
 function shareCardSvg(state, ending, opts) {
   /* patch84：分享卡重设计为 **720×900（4:5）一屏版**。
      原来是 680×1198 的长条（塞 3 段正文 + 8 条大事 + 标签），手机上要滚。
@@ -73,8 +74,12 @@ function shareCardSvg(state, ending, opts) {
   else if (e.earlyEnd) bgKey = 'sad';
   else if (/意外|事故|横死|夭折/.test(String(e.cause || ''))) bgKey = 'sad';
   var bgUrl = CARD_BG[bgKey] || CARD_BG.normal;
-  // patch168：**背景不透明、铺满整张卡**；除了文字和二维码，其余框、底色、书脊、遮罩全部去掉
-  p.push('<image x="0" y="0" width="' + W + '" height="' + H + '" preserveAspectRatio="xMidYMid slice" href="' + bgUrl + '" xlink:href="' + bgUrl + '"/>');
+  // patch183：**背景改由调用方用 Canvas 直接画**（见 __downloadShareCardRaw）。
+  // 原因：微信/部分 Android WebView 把 SVG 画到 Canvas 时会丢弃内嵌的 <image>，
+  // 导致分享卡只剩文字和二维码、背景空白。这里只在明确要求时才画背景。
+  if (!o.noBg) {
+    p.push('<image x="0" y="0" width="' + W + '" height="' + H + '" preserveAspectRatio="xMidYMid slice" href="' + bgUrl + '" xlink:href="' + bgUrl + '"/>');
+  }
 
   var y = 92;
   // ① 眉题
@@ -179,6 +184,7 @@ function shareCardSvg(state, ending, opts) {
   p.push(txt(W / 2, H - 46, 11, '#a89a86', 'middle', 'letter-spacing="1"', (typeof SHARE_AUTHOR_EXTRA !== 'undefined' ? SHARE_AUTHOR_EXTRA : '')));
 
   p.push('</svg>');
+  try { lastCardBgKey = bgKey; } catch (e) {}
   return p.join('');
 }
 // 供测试用（注入 bundle 时这行会被去掉）
