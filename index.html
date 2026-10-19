@@ -6,20 +6,40 @@
 <meta name="theme-color" content="#faf4e8" />
 <title>人生模拟器</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='7' fill='%23eec163'/%3E%3Cg stroke='%23eec163' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M16 3v3M16 26v3M3 16h3M26 16h3M7 7l2 2M23 23l2 2M25 7l-2 2M9 23l-2 2'/%3E%3C/g%3E%3C/svg%3E" />
-<!-- patch175：字体提前拉取。字体是首屏最关键的大文件，
-       不 preload 的话要等 CSS 解析完才去下载，文字会先以系统字体出现再跳变 -->
-<link rel="preload" href="assets/fonts/wawa-subset.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="assets/bg/city.webp" as="image">
+<!-- patch182：Service Worker 长期缓存。首次打开后资源存本地，之后秒开、可离线 -->
+<style>
+  #boot {
+    position: fixed; left: 0; right: 0; top: 0; bottom: 0; z-index: 9999;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 24px; box-sizing: border-box;
+    background: #faf4e8; color: #6b6357;
+    font: 15px/1.7 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    text-align: center; transition: opacity .3s;
+  }
+  #boot.hide { opacity: 0; pointer-events: none; }
+  #boot .spin {
+    width: 30px; height: 30px; border: 2px solid #e0d5bf; border-top-color: #b08d57;
+    border-radius: 50%; animation: bspin .9s linear infinite;
+  }
+  @keyframes bspin { to { transform: rotate(360deg); } }
+  #boot .msg { font-size: 14px; }
+  #boot .bar { width: 160px; height: 3px; border-radius: 2px; background: #ece2cf; overflow: hidden; }
+  #boot .bar > i { display: block; height: 100%; width: 0%; background: #b08d57; transition: width .25s ease; }
+  #boot .sub { font-size: 12px; color: #9c9285; max-width: 260px; line-height: 1.6; }
+  #boot .err { color: #b4584a; font-size: 13px; max-width: 300px; word-break: break-all; }
+  #boot button {
+    margin-top: 4px; padding: 8px 22px; border: 0; border-radius: 3px;
+    background: #b08d57; color: #fff; font-size: 14px; font-family: inherit;
+  }
+</style>
 <link rel="stylesheet" href="styles/base.css">
-  <link rel="stylesheet" href="styles/app-style.css" />
+<link rel="stylesheet" href="styles/app-style.css" />
 <link rel="stylesheet" href="styles/game.css" />
 </head>
 <body>
 <div id="app">
-  <!-- 开始页 -->
   <section id="start-screen" class="screen" aria-label="开始游戏"></section>
 
-  <!-- 游戏主界面 -->
   <div id="game" class="game" hidden>
     <header id="topbar" class="topbar"></header>
     <main id="board" class="board">
@@ -35,13 +55,140 @@
     </main>
   </div>
 
-  <!-- 结局页 -->
   <section id="ending-screen" class="screen" hidden aria-label="人生总结"></section>
 
   <div id="modal-root"></div>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
 </div>
+
+<div id="boot">
+  <div class="spin"></div>
+  <div class="msg" id="boot-msg">正在翻开这一生……</div>
+  <div class="bar"><i id="boot-bar"></i></div>
+  <div class="sub" id="boot-sub">第一次打开要加载一遍内容，之后就会快很多</div>
+</div>
+
 <noscript>这个游戏需要启用 JavaScript 才能运行。</noscript>
-<script src="bundle.js"></script>
+
+<script>
+/* patch182：加载进度、故障可见化、Service Worker 注册 */
+(function () {
+  var bootEl = document.getElementById('boot');
+  var msgEl = document.getElementById('boot-msg');
+  var barEl = document.getElementById('boot-bar');
+  var subEl = document.getElementById('boot-sub');
+  var t0 = Date.now();
+  var done = false;
+  var SCRIPTS = 7;
+  var loaded = 0;
+
+  window.__onPartLoaded = function () {
+    loaded++;
+    if (barEl) barEl.style.width = Math.round(loaded / SCRIPTS * 88) + '%';
+  };
+
+  function started() {
+    var s = document.getElementById('start-screen');
+    return !!(s && s.children && s.children.length > 0);
+  }
+  function finish() {
+    if (done) return;
+    done = true;
+    if (barEl) barEl.style.width = '100%';
+    if (bootEl) {
+      bootEl.classList.add('hide');
+      setTimeout(function () { if (bootEl.parentNode) bootEl.parentNode.removeChild(bootEl); }, 420);
+    }
+    try { prewarmAssets(); } catch (e) {}
+  }
+
+  function prewarmAssets() {
+    var urls = [
+      'assets/bg/city.webp', 'assets/bg/park.webp',
+      'assets/bg/mountain.webp', 'assets/bg/seaside.webp',
+      'assets/journal/journal-01.webp', 'assets/journal/journal-03.webp'
+    ];
+    var i = 0;
+    (function next() {
+      if (i >= urls.length) return;
+      var im = new Image();
+      im.onload = im.onerror = function () { i++; setTimeout(next, 120); };
+      im.src = urls[i];
+    })();
+  }
+  window.__prewarmAssets = prewarmAssets;
+
+  window.onerror = function (m, src, line) {
+    if (!bootEl || done) return;
+    var d = document.createElement('div');
+    d.className = 'err';
+    d.textContent = '出错了：' + m + (line ? '（第 ' + line + ' 行）' : '');
+    bootEl.appendChild(d);
+    if (msgEl) msgEl.textContent = '没能启动';
+    if (subEl) subEl.textContent = '把上面这行截图发我，或者先点下面的按钮';
+    if (!bootEl.querySelector('button')) {
+      var btn = document.createElement('button');
+      btn.textContent = '刷新试试';
+      btn.onclick = function () { location.reload(); };
+      bootEl.appendChild(btn);
+    }
+    var sp = bootEl.querySelector('.spin');
+    if (sp) sp.style.display = 'none';
+    return false;
+  };
+
+  var timer = setInterval(function () {
+    if (done) { clearInterval(timer); return; }
+    if (started()) { clearInterval(timer); finish(); return; }
+    var sec = (Date.now() - t0) / 1000;
+    if (sec >= 25 && bootEl && !bootEl.querySelector('button')) {
+      if (msgEl) msgEl.textContent = '比平时慢很多';
+      if (subEl) subEl.textContent = '内容可能没加载完。可以再等等，也可以点下面刷新';
+      var btn = document.createElement('button');
+      btn.textContent = '刷新试试';
+      btn.onclick = function () { location.reload(); };
+      bootEl.appendChild(btn);
+    } else if (sec >= 8 && msgEl && sec < 25) {
+      if (msgEl.textContent.indexOf('还在') < 0) {
+        msgEl.textContent = '还在加载…（' + loaded + '/' + SCRIPTS + '）';
+        if (subEl) subEl.textContent = '几个分片是同时下载的，网络慢时要等一会儿';
+      }
+    }
+  }, 600);
+
+  setTimeout(function () { if (!done && started()) finish(); }, 30000);
+
+  /* patch182：注册 Service Worker —— 首次打开后在后台把全部资源存进本地缓存，
+     之后再次打开直接走缓存，几乎 0 网络请求。注册失败不影响游戏本身。 */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        navigator.serviceWorker.register('sw.js').then(function (reg) {
+          // 检测到新版本时，安静地提示一句
+          reg.addEventListener('updatefound', function () {
+            var w = reg.installing;
+            if (!w) return;
+            w.addEventListener('statechange', function () {
+              if (w.state === 'installed' && navigator.serviceWorker.controller) {
+                if (subEl && !done) subEl.textContent = '新版本已就绪，下次打开会用它';
+              }
+            });
+          });
+        }).catch(function () { /* 静默失败：不支持就退回普通加载 */ });
+      }, 1200);   // 延后注册，别和首屏抢带宽
+    });
+  }
+})();
+</script>
+
+<!-- patch180：全部 defer → 并行下载、按顺序执行 -->
+<script defer src="01-数据与事件库.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+<script defer src="02-界面图标与引擎上.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+<script defer src="03-引擎上.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+<script defer src="04-引擎上-2.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+<script defer src="05-引擎.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+<script defer src="06-结局与界面.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+<script defer src="07-入口.js" onload="window.__onPartLoaded&&window.__onPartLoaded()"></script>
+
 </body>
 </html>
