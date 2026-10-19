@@ -10,17 +10,34 @@
 <title>人生模拟器</title>
 <style>
   html, body { margin: 0; padding: 0; background: #efe9dd; }
-  /* 加载前的占位，避免白屏闪烁 */
+  /* 加载占位：脚本就绪后被 JS 移除 */
   #boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
           font: 15px/1.6 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-          color: #8a8070; background: #efe9dd; transition: opacity .25s; }
-  #boot.hide { opacity: 0; pointer-events: none; }
+          color: #8a8070; background: #efe9dd; z-index: 9999; }
 </style>
 </head>
 <body>
+
 <div id="boot">正在翻开这一生……</div>
 
-<!-- 按顺序加载，顺序不能变（它们共享同一作用域） -->
+<!-- ===== 页面骨架（这些容器是 JS 必需的，缺一个就会白屏） ===== -->
+<div id="start-screen"></div>
+
+<div id="game" hidden>
+  <div id="topbar"></div>
+  <div id="scene-slot"></div>
+  <div id="stats-slot"></div>
+  <div id="event-slot"></div>
+  <div id="action-slot"></div>
+  <div id="journal-slot"></div>
+</div>
+
+<div id="ending-screen" hidden></div>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<!-- ===== 脚本：按顺序加载，顺序不能变（它们共享同一作用域） ===== -->
 <script src="js/01-data-events.js"></script>
 <script src="js/02-ui-icons.js"></script>
 <script src="js/03-engine-1.js"></script>
@@ -28,11 +45,12 @@
 <script src="js/05-engine-3.js"></script>
 <script src="js/06-ending-ui.js"></script>
 <script>
-  // 脚本执行完后隐藏占位
+  // 脚本执行完成后移除加载占位
   (function () {
     var b = document.getElementById('boot');
-    if (b) { b.classList.add('hide'); setTimeout(function(){ b.remove(); }, 400); }
+    if (b) { setTimeout(function () { if (b.parentNode) b.parentNode.removeChild(b); }, 60); }
   })();
 </script>
+
 </body>
 </html>
