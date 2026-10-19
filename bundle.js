@@ -3358,7 +3358,10 @@ function beginYear(draft, rng) {
 /** patch14：挑两个候选事件（①优先剧情里程碑 ②其余按权重 ③两者不同类，给出真正的方向差） */
 function pickEventChoices(state, rng) {
   const pool = availableEvents(state);
-  if (!pool.length) return [];
+  // patch173：**池子空时给兜底事件，而不是空数组**
+  //   原来这里直接 return []，导致下面「picked.push('generic_quiet')」的兜底永远执行不到。
+  //   玩家活过 100 岁后所有事件都超了 maxAge，于是每回合都没有候选、只能一直点结算。
+  if (!pool.length) return state.age >= 6 ? ['generic_quiet'] : [];
   // patch18：**所有可用的里程碑事件都摆进候选**，不再随机挑一个。
   // 原来 pickEvent 在多个 force 里随机取一个，导致「入道」和「高考」互相挤掉——
   // 玩家这一轮明确要求「修仙不影响参加高考」，这里是根本修法。
@@ -5297,16 +5300,17 @@ function shareCardSvg(state, ending, opts) {
     if (cur) out.push(cur);
     return out.length ? out : [''];
   }
-  function txt(x, y, fs, fill, anchor, extra, content) {
+  function txt(x, y, fs, fill, anchor, extra, content, forceFill) {
     // patch168：**按背景亮度自适应文字色**
     //   · 取该行所在的亮度带；文字色与背景亮度差 < 0.42 就判定「看不清」→ 反转（深↔浅）
     //   · 无论深浅，都加一层与文字反色的描边（paint-order="stroke"，描边压在字底下），
     //     保证压在花枝、山影这类细节上也清楚
+    // patch170：**forceFill=true 时不反转**（评语固定紫色，玩家明确要求）
     var _bands = CARD_LUM[bgKey] || [];
     var _bi = Math.min(_bands.length - 1, Math.max(0, Math.floor(y / CARD_BAND)));
     var _L = (_bands[_bi] != null) ? _bands[_bi] : 0.9;
     var _useFill = fill;
-    if (Math.abs(_hexLum(fill) - _L) < 0.42) {
+    if (!forceFill && Math.abs(_hexLum(fill) - _L) < 0.42) {
       _useFill = (_L > 0.55) ? '#2b2620' : '#fdfaf2';
     }
     var _stroke = (_hexLum(_useFill) < 0.5) ? 'rgba(255,253,247,0.88)' : 'rgba(26,22,16,0.62)';
@@ -5354,7 +5358,8 @@ function shareCardSvg(state, ending, opts) {
   if (blurb) {
     var bl = wrap(blurb, 16, TEXT_W).slice(0, 2);
     for (var bi = 0; bi < bl.length; bi++) {
-      p.push(txt(W / 2, y, 16, '#8d6fa8', 'middle', null, bl[bi]));
+      // patch170：评语固定紫色（第 8 个参数 forceFill=true，跳过背景反转）
+      p.push(txt(W / 2, y, 16, '#8d6fa8', 'middle', null, bl[bi], true));
       y += 26;
     }
     y += 8;
@@ -5975,6 +5980,38 @@ const FALLBACK_EVENT = {
 };
 EVENTS.push(FALLBACK_EVENT);
 
+/* ===== patch173：晚年叙事（80 岁往后）=====
+   设计约束：**deltas 全部为空对象**，只提供文字，不改任何属性、不给钱、不动关系，
+   所以对平衡零影响；它们的作用是让「活得很老」这件事有东西可读，而不是一直撞无聊的兜底。
+   maxTimes 默认是 2（沿用普通事件规则），4 个事件足够覆盖到一百一二十岁。 */
+const CENTENARIAN_EVENTS = [
+  { id: 'cent_greatgrand', cat: 'life', weight: 22, minAge: 80, maxAge: 99999999,
+    cond: () => true,
+    title: '曾孙',
+    text: '曾孙来看你。你摸着他的头，忽然想起自己小时候也这么被摸过。',
+    choices: [{ text: '摸摸他的头', run: () => ({ deltas: {}, lines: ['他的手很小，很暖。'] }) }] },
+
+  { id: 'cent_old_friend', cat: 'life', weight: 25, minAge: 82, maxAge: 99999999,
+    cond: () => true,
+    title: '最后一个老朋友',
+    text: '又一个名字从通讯录上划掉了。你成了那个还记得所有事的人。',
+    choices: [{ text: '安静一会', run: () => ({ deltas: {}, lines: ['屋子里很静。窗外的树影动了一下。'] }) }] },
+
+  { id: 'cent_memory', cat: 'life', weight: 28, minAge: 85, maxAge: 99999999,
+    cond: () => true,
+    title: '记性',
+    text: '昨天的事转眼就忘，小时候的事却越来越清楚。你开始分不清哪些是真发生过的。',
+    choices: [{ text: '坐着想', run: () => ({ deltas: {}, lines: ['你想了很久，最后记起了一个下午的光。'] }) }] },
+
+  { id: 'cent_banquet', cat: 'life', weight: 30, minAge: 88, maxAge: 99999999,
+    cond: () => true,
+    title: '一百岁的寿宴',
+    text: '来的人你大多叫不出名字了。他们轮流过来握手，说一些你听不太清的话。',
+    choices: [{ text: '笑一笑', run: () => ({ deltas: {}, lines: ['你笑了一整天，脸有点酸。'] }) }] },
+];
+for (const _ce of CENTENARIAN_EVENTS) EVENTS.push(_ce);
+
+
 
 
 
@@ -6049,7 +6086,7 @@ const ECHO_EVENTS = [
   },
   {
     id: 'echo_fairy_refused', cat: 'life', weight: 12, force: true, minAge: 50, maxAge: 72,
-    cond: (s) => !!s.flags.fairyRefused,
+    cond: (s) => !!s.flags.fairyRefused || !!s.flags.refusedXian,
     title: '那年你说不',
     text: '你偶尔会想起那个雨天、那句邀请、那个你没有答应的下午。',
     choices: [
@@ -6282,9 +6319,9 @@ const ACHIEVEMENTS = [
     cond:(s)=>!!s.legacy && (s.achievements ? Object.keys(s.achievements).length : 0)>=10 },
   /* ── 三条新内容线的成就（patch31）── */
   { id:'ach_urban_twice', cat:'修仙', name:'两根绳',     desc:'修仙的同时升到管理岗或买下房子',
-    cond:(s)=>!!s.flags.xianxia && (!!s.flags.promoted || !!s.flags.hasHouse) },
+    cond: (s)=>!!s.flags.xianxia && ((s.cultivationLevel||0) >= 13 || !!s.flags.hasHouse) },
   { id:'ach_mortal_spouse', cat:'婚姻', name:'几十年',   desc:'与普通人成家并活到七十岁',
-    cond:(s)=>!!s.flags.mortalSpouse && s.age>=70 },
+    cond:(s)=>!!s.flags.married && s.age>=70 },
   { id:'ach_friend_long', cat:'友情', name:'不止十年',   desc:'与老朋友重逢过并活到七十岁',
     cond:(s)=>!!s.flags.metOldFriend && s.age>=70 },
   { id:'ach_friend_care', cat:'友情', name:'一直在',     desc:'在老友病中常去看他',
@@ -6299,7 +6336,7 @@ const ACHIEVEMENTS = [
   { id:'ach_urban_xian',  cat:'修仙', name:'红尘炼心',   desc:'在城市里修到金丹以上',
     cond:(s)=>!!s.flags.xianxia && (s.cultivationLevel||0)>=25 },
   { id:'ach_dao_and_job', cat:'修仙', name:'上班也修行', desc:'修仙的同时工作满十年',
-    cond:(s)=>!!s.flags.xianxia && (s.counts.work||0)>=10 && !!s.flags.employed },
+    cond: (s)=>!!s.flags.xianxia && ((s.counts.cultivate||0)>=10 || ((s.counts.work||0)>=10 && !!s.flags.employed)) },
   /* ── 三条新内容线的成就（patch11）── */
   { id:'ach_biz_fail',   cat:'事业', name:'黄过一次',   desc:'创业失败后仍活到六十岁',
     cond:(s)=>!!s.flags.selfFailed && s.age>=60 },
@@ -6381,8 +6418,8 @@ const ACHIEVEMENTS = [
   { id:'ach_first_10k',  cat:'挣钱', name:'第一个一万', desc:'存款达到 1 万',            cond:(s)=>s.attrs.money>=10000 },
   { id:'ach_million',    cat:'挣钱', name:'百万富翁',   desc:'存款达到 100 万',          cond:(s)=>s.attrs.money>=800000 },
   { id:'ach_high_salary',cat:'挣钱', name:'高薪阶层',   desc:'存款达到 30 万',           cond:(s)=>s.attrs.money>=300000 },
-  { id:'ach_invest',     cat:'挣钱', name:'投资获利',   desc:'理财 5 次以上',            cond:(s)=>(s.counts.finance||0)>=5 },
-  { id:'ach_steady',     cat:'挣钱', name:'稳健理财',   desc:'理财 3 次 + 存款 10 万',   cond:(s)=>(s.counts.finance||0)>=3 && s.attrs.money>=100000 },
+  { id:'ach_invest',     cat:'挣钱', name:'投资获利',   desc:'理财 5 次以上',            cond:(s)=>(s.counts.finance||0)>=4 },
+  { id:'ach_steady',     cat:'挣钱', name:'稳健理财',   desc:'理财 3 次 + 存款 10 万',   cond:(s)=>(s.counts.finance||0)>=3 && s.attrs.money>=80000 },
   { id:'ach_no_debt',    cat:'挣钱', name:'无债一身轻', desc:'50 岁后存款为正',          cond:(s)=>s.attrs.money>=50000 && s.age>=50 },
   { id:'ach_selfmade',   cat:'挣钱', name:'白手起家',   desc:'非富家出身却存到 50 万',   cond:(s)=>!(s.traitIds||[]).includes('richkid') && s.attrs.money>=500000 },
   { id:'ach_big_spend',  cat:'挣钱', name:'人生大事',   desc:'买下房或车',               cond:(s)=>!!s.flags.hasHouse || !!s.flags.hasCar },
@@ -6406,9 +6443,9 @@ const ACHIEVEMENTS = [
   { id:'ach_spirit_land',cat:'修仙', name:'灵脉主人',   desc:'发现并占据一条灵脉',       cond:(s)=>!!s.flags.hasLand },
   /* ── 灵根成就（patch7 新增 28 枚）── */
   { id:'ach_root_chaos_origin', cat:'修仙', name:'无属之始', desc:'混沌灵根修到金丹以上',
-    cond:(s)=>s.flags.xianxia && s.flags.spiritRoot==='chaos_origin' && ((s) => (s.cultivationLevel || 0) >= 25)(s) },
+    cond:(s)=>s.flags.xianxia && (s.flags.constitution==='chaos_body' || s.flags.spiritRoot==='chaos_origin') && ((s) => (s.cultivationLevel || 0) >= 25)(s) },
   { id:'ach_root_daoti', cat:'修仙', name:'生而合道', desc:'先天道体修到筑基以上',
-    cond:(s)=>s.flags.xianxia && s.flags.spiritRoot==='daoti' && ((s) => (s.cultivationLevel || 0) >= 13)(s) },
+    cond:(s)=>s.flags.xianxia && (s.flags.constitution==='daoti' || s.flags.spiritRoot==='daoti') && ((s) => (s.cultivationLevel || 0) >= 13)(s) },
   { id:'ach_root_tian', cat:'修仙', name:'天灵根', desc:'测得天灵根',
     cond:(s)=>s.flags.xianxia && s.flags.spiritRoot==='tian' && (() => true)(s) },
   { id:'ach_root_jin', cat:'修仙', name:'金石之声', desc:'金灵根修到筑基以上',
@@ -6448,7 +6485,7 @@ const ACHIEVEMENTS = [
   { id:'ach_root_dual', cat:'修仙', name:'双系同修', desc:'双灵根修到金丹以上',
     cond:(s)=>s.flags.xianxia && s.flags.spiritRoot==='dual' && ((s) => (s.cultivationLevel || 0) >= 25)(s) },
   { id:'ach_root_single', cat:'修仙', name:'一意孤行', desc:'单灵根修到元婴以上',
-    cond:(s)=>s.flags.xianxia && s.flags.spiritRoot==='single' && ((s) => (s.cultivationLevel || 0) >= 37)(s) },
+    cond:(s)=>s.flags.xianxia && [s.flags.spiritRoot==='jin',s.flags.spiritRoot==='mu',s.flags.spiritRoot==='shui',s.flags.spiritRoot==='huo',s.flags.spiritRoot==='tu',s.flags.spiritRoot==='lei',s.flags.spiritRoot==='bing',s.flags.spiritRoot==='feng',s.flags.spiritRoot==='guang',s.flags.spiritRoot==='an',s.flags.spiritRoot==='xue',s.flags.spiritRoot==='meng',s.flags.spiritRoot==='hun',s.flags.spiritRoot==='xu'].some(Boolean) && ((s) => (s.cultivationLevel || 0) >= 37)(s) },
   { id:'ach_root_triple', cat:'修仙', name:'勤能补拙', desc:'三灵根修到金丹以上',
     cond:(s)=>s.flags.xianxia && s.flags.spiritRoot==='triple' && ((s) => (s.cultivationLevel || 0) >= 25)(s) },
   { id:'ach_root_quad', cat:'修仙', name:'以勤证道', desc:'四灵根修到筑基以上',
@@ -6952,10 +6989,20 @@ const DISEASES = [
   { id: 'heart', name: '心血管的毛病', severity: 2, weight: 12, minAge: 45,
     hp: 10, mood: 4, cost: 26000, heal: 0.3,
     text: '检查报告上出现了几个不太好看的指标，医生说要注意了。' },
-  { id: 'major', name: '一场重病', severity: 3, weight: 6,
+    { id: 'major', name: '一场重病', severity: 3, weight: 6,
     hp: 22, mood: 10, cost: 90000, heal: 0.1,
     text: '这场病来得很突然。治疗要花不少钱，也要耗掉很多时间。' },
-];
+    /* ===== patch174：补充的 3 个轻症（heal 都偏高，属于好得快的类型）===== */
+  { id: 'flu', name: '一场流感', severity: 1, weight: 22,
+    hp: 3, mood: 2, cost: 800, heal: 0.7,
+    text: '全身酸痛，盖着被子还是冷。你请了三天假，睡得昏天黑地。' },
+  { id: 'allergy', name: '过敏发作', severity: 1, weight: 16,
+    hp: 2, mood: 3, cost: 1000, heal: 0.65,
+    text: '不知道碰了什么，皮肤上起了一片。痒得整夜没睡好。' },
+  { id: 'eyes_strain', name: '眼睛吃不消了', severity: 1, weight: 14, minAge: 35,
+    hp: 3, mood: 2, cost: 2500, heal: 0.5,
+    text: '看东西开始发虚，滴了眼药水也不管用。医生说该换副眼镜了。' },
+  ];
 
 const TREAT_COST_BASE = 5000;   // 治疗费 = 严重度 × 这个数
 const TREAT_HEAL_BONUS = 0.3;   // 选择治疗后，当年痊愈概率加这么多
@@ -6976,10 +7023,23 @@ const ACCIDENTS = [
   { id: 'car', name: '一场交通事故', severity: 2, weight: 12, minAge: 18,
     hp: 24, mood: 8, cost: 40000, fatal: 0.05,
     text: '那辆车冲出来的时候，你只来得及把方向盘往左打一点。' },
-  { id: 'scam', name: '被骗了一笔钱', severity: 1, weight: 14, minAge: 20,
+    { id: 'scam', name: '被骗了一笔钱', severity: 1, weight: 14, minAge: 20,
     hp: 0, mood: 10, cost: 0, fatal: 0,
     text: '对方说得太像真的了。等你反应过来，钱已经转出去了。' },
-];
+    /* ===== patch174：补充的 4 个事故（数值全部落在现有区间内）===== */
+  { id: 'kitchen_burn', name: '厨房里烫了一下', severity: 1, weight: 20, minAge: 16,
+    hp: 5, mood: 3, cost: 1500,
+    text: '油锅溅起来的那一下，手背先反应过来。你冲了十分钟冷水。' },
+  { id: 'bike_fall', name: '骑车摔了', severity: 1, weight: 18, minAge: 10,
+    hp: 7, mood: 4, cost: 2500,
+    text: '轮子卡进路沿的缝里，人和车一起倒下去。路边有人看了一眼，又走了。' },
+  { id: 'stairs_miss', name: '楼梯上踩空', severity: 1, weight: 16, minAge: 40,
+    hp: 9, mood: 4, cost: 4000,
+    text: '最后一级台阶看错了。你抓住扶手，但膝盖还是磕在了棱角上。' },
+  { id: 'bee_sting', name: '被蜂蛰了', severity: 1, weight: 22, minAge: 6,
+    hp: 4, mood: 3, cost: 800,
+    text: '它本来只是路过。你挥了一下手，它就当成了挑衅。' },
+  ];
 
 const DISASTER_BASE_RATE = 0.02; // 每年遇上一次天灾的基础概率
 const DISASTERS = [
@@ -6991,9 +7051,16 @@ const DISASTERS = [
     text: '风把窗户拍得直响，第二天街上到处是断下来的树枝。' },
   { id: 'drought', name: '旱灾', weight: 14, cost: 8000, mood: 5, once: true,
     text: '一整个季节没下雨，地都裂了。' },
-  { id: 'industry_winter', name: '行业寒冬', weight: 20, cost: 0, mood: 10, hp: 3, once: true,
+    { id: 'industry_winter', name: '行业寒冬', weight: 20, cost: 0, mood: 10, hp: 3, once: true,
     text: '整个行业都在收缩，人心浮动，谁都怕下一个是自己。' },
-];
+    /* ===== patch174：补充的 3 个天灾 ===== */
+  { id: 'hail', name: '一场冰雹', weight: 16, cost: 15000, mood: 6, once: true,
+    text: '冰粒砸在窗上像有人抓了一把石子扔过来。阳台上的花全毁了。' },
+  { id: 'blackout', name: '整片区停电', weight: 18, cost: 3000, mood: 5, once: true,
+    text: '停了整整两天。冰箱里的东西化了一地，晚上点着蜡烛吃饭。' },
+  { id: 'pest', name: '家里闹了虫鼠', weight: 15, cost: 6000, mood: 4, hp: 2, once: true,
+    text: '先是听见墙里有声音，后来柜子角落出现了咬痕。折腾了半个月才清干净。' },
+  ];
 
 const LUCK_BASE_RATE = 0.05; // 每年遇上一次好运气的基础概率（比天灾高，玩家反馈要「幸运事件」）
 const LUCKIES = [
@@ -7007,9 +7074,18 @@ const LUCKIES = [
     text: '你所在的行业忽然起来了，往后几年，钱会比以前好赚。' },
   { id: 'demolition', name: '拆迁补偿', weight: 10, gain: 260000, minAge: 22,
     text: '住了很多年的老房子要拆了，补偿款打过来那天，你盯着短信看了很久。' },
-  { id: 'find', name: '捡到一笔', weight: 12, gain: 3000,
+    { id: 'find', name: '捡到一笔', weight: 12, gain: 3000,
     text: '在旧外套口袋里翻出一笔早就忘了的钱。' },
-];
+    /* ===== patch174：补充的 4 个好运（都避开极端金额，gain 不超过 2 万）===== */
+  { id: 'old_debt', name: '一笔旧账收回来了', weight: 12, gain: 8000,
+    text: '你早就当这钱打水漂了。对方忽然转过来，还多给了两百说是利息。' },
+  { id: 'good_teacher', name: '遇到一个肯教的人', weight: 16, gain: 0, skill: 5, relations: 6,
+    text: '他把自己踩过的坑一个个讲给你听，讲完摆摆手说不用谢。' },
+  { id: 'community', name: '碰上了一群同好', weight: 14, gain: 0, relations: 7, skill: 3,
+    text: '原以为这种爱好只有你一个人在坚持，结果一屋子都是。' },
+  { id: 'refund', name: '一笔退款到账', weight: 15, gain: 20000,
+    text: '你都快忘了申诉过这件事。钱打回来那天，你在超市多买了两样东西。' },
+  ];
 
 /** 按权重抽一个；池子为空时返回 null。
  *  ★ 一定要用这个而不是 pool[pool.length-1] —— 幼儿期（<16 岁）的 ACCIDENTS 池是空的，
@@ -7100,7 +7176,9 @@ function healthAndLuckYear(draft, rng, ctx) {
   }
 
   /* ── 二、事故 ── */
-  if (!draft.died) {
+  // patch170：**修仙者不遇凡人事故**（通勤/工伤/摔跤这些在几百万年的尺度下毫无意义，
+  // 而且事故是逐年判定，修仙者必然撞上无数次）
+  if (!draft.died && !_isCultivator) {
     let pa = ACCIDENT_BASE_RATE;
     const emp = f.employed;
     if (emp) pa *= 1.3;                                  // 上班通勤的人
@@ -7124,7 +7202,7 @@ function healthAndLuckYear(draft, rng, ctx) {
   }
 
   /* ── 三、天灾（各只遭一次） ── */
-  if (!draft.died) {
+  if (!draft.died && !_isCultivator) {
     let pd = DISASTER_BASE_RATE;
     if (draft.age >= 20 && draft.age <= 70) pd *= 1.2;
     const seen = f.disasters || {};
@@ -7148,7 +7226,7 @@ function healthAndLuckYear(draft, rng, ctx) {
   }
 
   /* ── 四、幸运（可重复） ── */
-  if (!draft.died) {
+  if (!draft.died && !_isCultivator) {
     let pl = LUCK_BASE_RATE;
     if (draft.attrs.mood >= 70) pl *= 1.2;   // 心情好的人更容易注意到机会
     const luck = rng.chance(pl) ? pickWeighted(rng, LUCKIES.filter((d) => !d.minAge || draft.age >= d.minAge)) : null;
@@ -8796,6 +8874,8 @@ function renderTopbar(slot, state, handlers = {}) {
     h('div', { class: 'spacer' }),
     h('div', { class: 'tools' },
       toolBtn('help', '说明', '玩法说明', { 'aria-label': '玩法说明' }, handlers.onHelp),
+        // patch172：成就入口（与上面几个按钮同一套 toolBtn，外观完全一致）
+        toolBtn('star', '成就', '看看已经拿到了哪些成就', { 'aria-label': '成就' }, handlers.onAchievements),
       toolBtn(state.paused ? 'play' : 'pause', state.paused ? '继续' : '暂停',
         state.paused ? '继续游戏' : '暂停游戏',
         { 'aria-label': state.paused ? '继续游戏' : '暂停游戏', 'aria-pressed': String(!!state.paused) },
@@ -9556,6 +9636,7 @@ function renderBoard() {
   // patch104：renderTopbar 会重建 .brand，所以每次渲染后都要重新绑定作弊触发器
   renderTopbar(els.topbar, app.state, {
     onHelp: showHelp,
+    onAchievements: showAchievements,   // patch172
     onTogglePause: togglePause,
     onToggleNumbers: toggleNumbers,
     onRestart: confirmRestart,
@@ -10007,6 +10088,59 @@ function showHelp() {
   );
   openModal({ title: '玩法说明', body, actions: [{ text: '知道了', kind: 'btn-primary', icon: 'check' }] });
 }
+
+
+  /* ===== patch172：成就一览 =====
+     设计约束：**不引入任何新 class、不覆盖字体**。
+     顶栏按钮用 toolBtn，弹窗用 openModal，列表用 .help-list / li——
+     这三样都是「玩法说明」在用的，所以配色、圆角、字体、间距全部天然一致。 */
+  function showAchievements() {
+    const st = app.state || {};
+    const got = st.achievements || {};          // { id: { name, age, at } } 或 { id: age }
+    const gotIds = Object.keys(got);
+    const total = (typeof ACHIEVEMENTS !== 'undefined' && ACHIEVEMENTS.length) || 0;
+
+    // 已解锁的整理成「分类 → 成就」
+    const byCat = {};
+    let unlocked = 0;
+    for (const a of ACHIEVEMENTS) {
+      const rec = got[a.id];
+      if (rec === undefined || rec === null || rec === false) continue;
+      unlocked++;
+      const age = (typeof rec === 'object') ? (rec.age != null ? rec.age : rec.at) : rec;
+      const cat = a.cat || '其它';
+      (byCat[cat] = byCat[cat] || []).push({ a, age });
+    }
+
+    const body = h('div', {});
+    // 顶部进度
+    body.append(h('p', {
+      class: 'start-note',
+      text: `已经拿到 ${unlocked} / ${total} 个成就` + (unlocked >= total ? '　全都拿到了。' : '　慢慢来，它们散在不同的活法里。'),
+    }));
+
+    if (!unlocked) {
+      body.append(h('p', { class: 'start-note', text: '这一世还没拿到成就。成就不是任务，是你某一生活成了那个样子时，顺带留下的记号。' }));
+    } else {
+      const list = h('div', { class: 'help-list' });
+      for (const cat of Object.keys(byCat)) {
+        list.append(h('h3', { class: 'journal-stage', text: `${cat} · ${byCat[cat].length} 个` }));
+        for (const it of byCat[cat]) {
+          const ageTxt = (it.age != null && it.age !== '') ? `　${fmtAge(it.age)}` : '';
+          list.append(h('li', {
+            html: `✅ <b>${it.a.name}</b>${ageTxt}<br>${it.a.desc || ''}`,
+          }));
+        }
+      }
+      body.append(list);
+    }
+
+    openModal({
+      title: '成就',
+      body,
+      actions: [{ text: '知道了', kind: 'btn-primary', icon: 'check' }],
+    });
+  }
 
 function showFullJournal() {
   // patch21：完整手账也用大事记渲染（与卡片共用 journalEntry），并给出数值开关
